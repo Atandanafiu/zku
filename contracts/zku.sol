@@ -1,18 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.4;
-
 contract Purchase {
-    uint256 public value;
+    uint public value;
     address payable public seller;
     address payable public buyer;
-    uint256 private timeOfPurchase;
+    uint public timeOfPurchase;
 
-    enum State {
-        Created,
-        Locked,
-        Release,
-        Inactive
-    }
+    enum State { Created, Locked, Release, Inactive }
     // The state variable has a default value of the first member, `State.created`
     State public state;
 
@@ -27,40 +21,39 @@ contract Purchase {
     error OnlySeller();
     /// The function cannot be called at the current state.
     error InvalidState();
-
     /// The provided value has to be even.
     error ValueNotEven();
-    /// time of purchase must still be within 5 minute
+    ///The time of purchase must be within 5mins
     error TimePassed();
 
     modifier onlyBuyer() {
-        if (msg.sender != buyer) revert OnlyBuyer();
+        if ((msg.sender != buyer))
+            revert OnlyBuyer();
         _;
     }
 
     modifier onlySeller() {
-        if (msg.sender != seller) revert OnlySeller();
+        if (msg.sender != seller)
+            revert OnlySeller();
         _;
     }
 
     modifier inState(State state_) {
-        if (state != state_) revert InvalidState();
+        if (state != state_)
+            revert InvalidState();
         _;
     }
 
-    modifier stateLocked() {
+    modifier lockState() {
         require(state == State.Locked);
         _;
     }
 
-    modifier secondCondition() {
-        if (
-            !(msg.sender == buyer) ||
-            !(block.timestamp <= (timeOfPurchase + 5 minutes))
-        ) {
-            revert TimePassed();
-        }
-        _;
+    modifier timeSpent() {
+      if((buyer != msg.sender) || (timeOfPurchase >= 1 minutes)) {
+          revert TimePassed();
+      }
+      _;
     }
 
     event Aborted();
@@ -74,13 +67,19 @@ contract Purchase {
     constructor() payable {
         seller = payable(msg.sender);
         value = msg.value / 2;
-        if ((2 * value) != msg.value) revert ValueNotEven();
+        timeOfPurchase = block.timestamp;
+        if ((2 * value) != msg.value)
+            revert ValueNotEven();
     }
 
     /// Abort the purchase and reclaim the ether.
     /// Can only be called by the seller before
     /// the contract is locked.
-    function abort() external onlySeller inState(State.Created) {
+    function abort()
+        external
+        onlySeller
+        inState(State.Created)
+    {
         emit Aborted();
         state = State.Inactive;
         // We use transfer here directly. It is
@@ -96,49 +95,34 @@ contract Purchase {
     /// is called.
     function confirmPurchase()
         external
-        payable
         inState(State.Created)
         condition(msg.value == (2 * value))
+        payable
     {
         emit PurchaseConfirmed();
         buyer = payable(msg.sender);
-        timeOfPurchase = block.timestamp;
         state = State.Locked;
     }
 
-    /// Confirm the purchase as buyer.
-    /// Transaction has to include `2 * value` ether.
-    /// The ether will be locked until confirmReceived
-    /// is called.
-    function completePurchase() external payable stateLocked secondCondition {
-        state = State.Release;
-        this.confirmReceived();
-        this.refundSeller();
-
-        // send respected value to buyer and seller
-    }
-
-    /// Confirm that you (the buyer) received the item.
-    /// This will release the locked ether.
-    function confirmReceived() external onlyBuyer inState(State.Locked) {
+    function completePurchase() 
+        external
+        inState(State.Locked)
+        timeSpent
+        payable
+    {
         emit ItemReceived();
+        emit SellerRefunded();
+
         // It is important to change the state first because
         // otherwise, the contracts called using `send` below
         // can call in again here.
         state = State.Release;
-
         buyer.transfer(value);
-    }
-
-    /// This function refunds the seller, i.e.
-    /// pays back the locked funds of the seller.
-    function refundSeller() external onlySeller inState(State.Release) {
-        emit SellerRefunded();
-        // It is important to change the state first because
-        // otherwise, the contracts called using `send` below
-        // can call in again here.
-        state = State.Inactive;
-
         seller.transfer(3 * value);
+
+        state = State.Inactive;
+        
+
+
     }
 }
