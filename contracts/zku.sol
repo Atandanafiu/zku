@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.4;
+
 contract Purchase {
-    uint public value;
+    uint256 public value;
     address payable public seller;
     address payable public buyer;
-    uint public timeOfPurchase;
 
-    enum State { Created, Locked, Release, Inactive }
+    uint256 public timeConfirmed;
+
+    enum State {
+        Created,
+        Locked,
+        Release,
+        Inactive
+    }
     // The state variable has a default value of the first member, `State.created`
     State public state;
 
@@ -23,37 +30,20 @@ contract Purchase {
     error InvalidState();
     /// The provided value has to be even.
     error ValueNotEven();
-    ///The time of purchase must be within 5mins
-    error TimePassed();
 
     modifier onlyBuyer() {
-        if ((msg.sender != buyer))
-            revert OnlyBuyer();
+        if (msg.sender != buyer) revert OnlyBuyer();
         _;
     }
 
     modifier onlySeller() {
-        if (msg.sender != seller)
-            revert OnlySeller();
+        if (msg.sender != seller) revert OnlySeller();
         _;
     }
 
     modifier inState(State state_) {
-        if (state != state_)
-            revert InvalidState();
+        if (state != state_) revert InvalidState();
         _;
-    }
-
-    modifier lockState() {
-        require(state == State.Locked);
-        _;
-    }
-
-    modifier timeSpent() {
-      if((buyer != msg.sender) || (timeOfPurchase >= 1 minutes)) {
-          revert TimePassed();
-      }
-      _;
     }
 
     event Aborted();
@@ -67,19 +57,13 @@ contract Purchase {
     constructor() payable {
         seller = payable(msg.sender);
         value = msg.value / 2;
-        timeOfPurchase = block.timestamp;
-        if ((2 * value) != msg.value)
-            revert ValueNotEven();
+        if ((2 * value) != msg.value) revert ValueNotEven();
     }
 
     /// Abort the purchase and reclaim the ether.
     /// Can only be called by the seller before
     /// the contract is locked.
-    function abort()
-        external
-        onlySeller
-        inState(State.Created)
-    {
+    function abort() external onlySeller inState(State.Created) {
         emit Aborted();
         state = State.Inactive;
         // We use transfer here directly. It is
@@ -95,34 +79,40 @@ contract Purchase {
     /// is called.
     function confirmPurchase()
         external
+        payable
         inState(State.Created)
         condition(msg.value == (2 * value))
-        payable
     {
         emit PurchaseConfirmed();
         buyer = payable(msg.sender);
         state = State.Locked;
+        timeConfirmed = block.timestamp;
     }
 
-    function completePurchase() 
-        external
-        inState(State.Locked)
-        timeSpent
-        payable
-    {
-        emit ItemReceived();
-        emit SellerRefunded();
+    modifier done() {
+        require(
+            block.timestamp > timeConfirmed + 30 seconds ||
+                (msg.sender == buyer && state == State.Locked),
+            "wait for five minutes or alert buyer to approve"
+        );
+        _;
+    }
 
+    function completePurchase() external done {
+        emit ItemReceived();
         // It is important to change the state first because
         // otherwise, the contracts called using `send` below
         // can call in again here.
         state = State.Release;
+
         buyer.transfer(value);
-        seller.transfer(3 * value);
 
+        emit SellerRefunded();
+        // It is important to change the state first because
+        // otherwise, the contracts called using `send` below
+        // can call in again here.
         state = State.Inactive;
-        
 
-
+        seller.transfer(3 * value);
     }
 }
